@@ -56,12 +56,12 @@ Bind them however you like:
 
 ** Customization
 
-| Variable                    | Default | Description                            |
-|-----------------------------+---------+----------------------------------------|
-| ~occult-indicator~          | ~"⨁ "~ | Prefix glyph for the fold summary      |
-| ~occult-ellipsis~           | ~"..."~ | Suffix shown where text is hidden      |
-| ~occult-summary-max-length~ | ~50~    | Max visible chars from the first line  |
-| ~occult-auto-reveal~        | ~nil~   | Auto-reveal mode: nil, echo, or expand |
+| Variable                  | Default | Description                            |
+|---------------------------+---------+----------------------------------------|
+| ~occult-indicator~          | ~"📎 "~   | Prefix glyph for the fold summary      |
+| ~occult-ellipsis~           | ~"..."~   | Suffix shown where text is hidden      |
+| ~occult-summary-max-length~ | ~80~      | Max visible chars from the first line  |
+| ~occult-auto-reveal~        | ~nil~     | Auto-reveal mode: nil, echo, or expand |
 
 ** Search integration
 

@@ -52,7 +52,7 @@
   "Suffix string appended to truncated fold summaries."
   :type 'string)
 
-(defcustom occult-summary-max-length 50
+(defcustom occult-summary-max-length 80
   "Maximum number of characters from the first line to display in a fold."
   :type 'integer)
 
