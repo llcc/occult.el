@@ -31,6 +31,14 @@ Occult works on any region in any buffer - including read-only and special-mode 
   :straight (:host github :repo "agzam/occult.el"))
 #+end_src
 
+*** With built-in package-vc integration
+
+#+begin_src emacs-lisp
+(use-package occult
+  :vc (:url "https://github.com/agzam/occult.el"
+            :rev :newest))
+#+end_src
+
 *** Manual
 
 Clone the repo and add it to ~load-path~:

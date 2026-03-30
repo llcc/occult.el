@@ -1,3 +1,4 @@
+;; -*- no-byte-compile: t; -*-
 ;;; occult-tests.el --- Tests for occult.el -*- lexical-binding: t; -*-
 ;;
 ;; SPDX-License-Identifier: GPL-3.0-or-later
