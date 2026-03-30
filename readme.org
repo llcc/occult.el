@@ -16,7 +16,7 @@ The first line of the folded region stays visible and navigable as regular text.
 
 * Why
 
-Sometimes you want to visually declutter a buffer without losing content. LLM chat sessions get verbose, org documents accumulate boilerplate, eshell output floods the screen. Existing folding mechanisms (outline-mode, org-cycle, hideshow) are structure-aware - they fold headings, blocks, or defuns. They can't fold an arbitrary selected region.
+Sometimes you want to visually declutter a buffer without losing content. LLM chat sessions get verbose, org documents accumulate boilerplate, eshell output floods the screen. Existing folding mechanisms (outline-mode, org-cycle, hideshow) are structure-aware - they fold headings, blocks, or defuns. *They can't fold an arbitrary selected region*.
 
 Occult works on any region in any buffer - including read-only and special-mode buffers. The hidden text is never removed from the buffer, so tools that read buffer content (LLM packages like gptel, eca, agent-shell; org-export; copy/kill) see the full unfolded text.
 
