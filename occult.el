@@ -128,6 +128,9 @@ characters from BEG, whichever comes first."
 
 ;;; Overlay lifecycle
 
+(define-fringe-bitmap 'occult-fold-bitmap
+  [0 24 60 126 60 24 0 0])
+
 (defun occult--create-overlay (beg end)
   "Create an occult fold spanning BEG to END.
 The first line (up to `occult-summary-max-length' chars) stays visible
@@ -144,7 +147,15 @@ Returns the parent overlay."
     (overlay-put parent 'occult t)
     (overlay-put parent 'occult-body body)
     (overlay-put parent 'face 'occult-summary)
-    (overlay-put parent 'before-string indicator)
+    (overlay-put parent 'invisible 'occult)
+    (overlay-put
+     parent
+     'before-string
+     (propertize " "
+                 'display
+                 `(left-fringe occult-fold-bitmap)
+                 'keymap occult-overlay-map
+                 'mouse-face 'highlight))
     (overlay-put parent 'keymap occult-overlay-map)
     (overlay-put parent 'help-echo "Press TAB to expand")
     (overlay-put parent 'evaporate t)
@@ -152,7 +163,7 @@ Returns the parent overlay."
     ;; Body overlay - hides everything after the visible portion
     (overlay-put body 'occult-parent parent)
     (overlay-put body 'invisible 'occult)
-    (overlay-put body 'before-string ellipsis)
+    ;; (overlay-put body 'before-string ellipsis)
     (overlay-put body 'evaporate t)
     (overlay-put body 'isearch-open-invisible #'occult--isearch-reveal)
     (overlay-put body 'isearch-open-invisible-temporary
