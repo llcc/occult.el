@@ -72,6 +72,30 @@ Note: isearch integration is always active regardless of this setting."
   "Mode-line lighter shown when occult folds exist in the buffer."
   :type 'string)
 
+(defcustom occult-edit-lighter " OccEdit"
+  "Mode-line lighter shown in an active `occult-edit-mode' session."
+  :type 'string)
+
+(defcustom occult-edit-commit-key "C-c C-c"
+  "Key sequence that commits an `occult-edit-mode' session.
+Takes effect the next time `occult-edit-mode' is enabled."
+  :type 'key-sequence
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'occult-edit--rebuild-keymap)
+                    (boundp 'occult-edit-mode-map))
+           (occult-edit--rebuild-keymap))))
+
+(defcustom occult-edit-abort-key "C-c C-k"
+  "Key sequence that aborts an `occult-edit-mode' session.
+Takes effect the next time `occult-edit-mode' is enabled."
+  :type 'key-sequence
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (and (fboundp 'occult-edit--rebuild-keymap)
+                    (boundp 'occult-edit-mode-map))
+           (occult-edit--rebuild-keymap))))
+
 ;;; Faces
 
 (defface occult-summary
@@ -81,6 +105,22 @@ Note: isearch integration is always active regardless of this setting."
 (defface occult-indicator
   '((t :inherit font-lock-constant-face))
   "Face for the indicator glyph prefixing a fold summary.")
+
+(defface occult-edit-header
+  '((t :weight bold :inherit font-lock-function-name-face))
+  "Face for the edit-session label in the header line.")
+
+(defface occult-edit-commit-key
+  '((t :weight bold :inherit success))
+  "Face for the commit key in the edit-session header line.")
+
+(defface occult-edit-abort-key
+  '((t :weight bold :inherit error))
+  "Face for the abort key in the edit-session header line.")
+
+(defface occult-edit-header-separator
+  '((t :inherit shadow))
+  "Face for labels and separators in the edit-session header line.")
 
 ;;; Internal variables
 
@@ -96,6 +136,7 @@ List of (BEG END CONTENT-HASH) tuples.")
 (defvar occult-overlay-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "TAB") #'occult-toggle)
+    (define-key map (kbd "e") #'occult-edit-region)
     (define-key map [mouse-1] #'occult-toggle)
     map)
   "Keymap active on occult fold overlays.")
@@ -373,6 +414,172 @@ Otherwise, do nothing."
     (mapc #'occult--delete-fold ovs)
     (occult--maybe-disable-mode)
     (message "Revealed %d fold(s)" (length ovs))))
+
+;;; Edit mode for indirect-buffer editing
+
+(defvar-local occult-edit--original-text nil
+  "Text of the fold region at the moment the edit session began.
+Used by `occult-edit-abort' to restore the original content.")
+
+(defvar-local occult-edit--base-buffer nil
+  "Base buffer the current edit session is attached to.")
+
+(defvar-local occult-edit--read-only-p nil
+  "Non-nil when the current session is a read-only (view) session.
+Set from the base buffer's `buffer-read-only' at session start.")
+
+(defvar occult-edit-mode-map (make-sparse-keymap)
+  "Keymap active inside `occult-edit-mode'.
+Rebuilt from `occult-edit-commit-key' and `occult-edit-abort-key'
+by `occult-edit--rebuild-keymap'.")
+
+(defun occult-edit--rebuild-keymap ()
+  "Rebuild `occult-edit-mode-map' from the user custom key variables."
+  (setcdr occult-edit-mode-map nil)
+  (define-key occult-edit-mode-map (kbd occult-edit-commit-key)
+              #'occult-edit-commit)
+  (define-key occult-edit-mode-map (kbd occult-edit-abort-key)
+              #'occult-edit-abort)
+  occult-edit-mode-map)
+
+;; Populate the keymap from the default custom values.
+(occult-edit--rebuild-keymap)
+
+(defun occult-edit--key-for (command)
+  "Return human-readable key description for COMMAND in the edit keymap.
+Falls back to the extended-command form when no key is bound."
+  (let* ((result (where-is-internal command occult-edit-mode-map nil t))
+         ;; `where-is-internal' can return either a single key sequence or
+         ;; a list containing one, depending on Emacs version; normalise.
+         (keys (if (and (consp result) (not (vectorp result)))
+                   (car result)
+                 result)))
+    (if keys
+        (key-description keys)
+      (format "M-x %s" command))))
+
+(defun occult-edit--header-line ()
+  "Build the header-line string for the active edit session.
+Renders a read-only-aware view when `occult-edit--read-only-p' is
+non-nil (only a close action is shown)."
+  (if occult-edit--read-only-p
+      (let ((close (occult-edit--key-for #'occult-edit-abort)))
+        (concat
+         (propertize " View Occult Fold " 'face 'occult-edit-header)
+         (propertize " │ " 'face 'occult-edit-header-separator)
+         (propertize close 'face 'occult-edit-abort-key)
+         (propertize " close " 'face 'occult-edit-header-separator)))
+    (let ((commit (occult-edit--key-for #'occult-edit-commit))
+          (abort (occult-edit--key-for #'occult-edit-abort)))
+      (concat
+       (propertize " Edit Occult Fold " 'face 'occult-edit-header)
+       (propertize " │ " 'face 'occult-edit-header-separator)
+       (propertize commit 'face 'occult-edit-commit-key)
+       (propertize " commit " 'face 'occult-edit-header-separator)
+       (propertize "│ " 'face 'occult-edit-header-separator)
+       (propertize abort 'face 'occult-edit-abort-key)
+       (propertize " abort " 'face 'occult-edit-header-separator)))))
+
+(define-minor-mode occult-edit-mode
+  "Minor mode active inside an occult fold edit session.
+Provides a header-line with commit and abort bindings."
+  :lighter occult-edit-lighter
+  :keymap occult-edit-mode-map
+  (if occult-edit-mode
+      (progn
+        (occult-edit--rebuild-keymap)
+        (setq-local header-line-format '(:eval (occult-edit--header-line))))
+    (kill-local-variable 'header-line-format)))
+
+(defun occult-edit--cleanup-overlays ()
+  "Remove occult overlays in the current (indirect) buffer.
+Called right after creating the indirect buffer so the full fold
+content becomes visible and editable, and no fold
+modification-hooks fire on shared text edits."
+  (dolist (ov (overlays-in (point-min) (point-max)))
+    (when (or (overlay-get ov 'occult)
+              (overlay-get ov 'occult-parent))
+      (delete-overlay ov))))
+
+;;;###autoload
+(defun occult-edit-region ()
+  "Edit the occult fold at point in a narrowed indirect buffer.
+The fold overlay remains collapsed in the base buffer; the
+indirect buffer shows the fold content in full for editing.  Text
+is shared, so edits propagate immediately to the base buffer.
+Use `occult-edit-commit' to keep the changes and close the
+indirect buffer, or `occult-edit-abort' to restore the original
+content.
+
+If the base buffer is read-only, the session starts in a view-only
+mode with a close binding and no commit/abort semantics."
+  (interactive)
+  (unless (occult--overlay-at-point)
+    (user-error "No occult fold at point"))
+  (let* ((ov (occult--overlay-at-point))
+         (beg (overlay-start ov))
+         (end (overlay-end ov))
+         (original (buffer-substring-no-properties beg end))
+         (base-buffer (current-buffer))
+         (read-only-p buffer-read-only)
+         (edit-name (generate-new-buffer-name
+                     (format "*occult-%s: %s*"
+                             (if read-only-p "view" "edit")
+                             (buffer-name))))
+         (buf (make-indirect-buffer base-buffer edit-name t)))
+    (with-current-buffer buf
+      (occult-edit--cleanup-overlays)
+      (narrow-to-region beg end)
+      (goto-char (point-min))
+      (setq-local occult-edit--original-text original)
+      (setq-local occult-edit--base-buffer base-buffer)
+      (setq-local occult-edit--read-only-p read-only-p)
+      (occult-edit-mode 1)
+      (set-buffer-modified-p nil))
+    (pop-to-buffer buf)
+    buf))
+
+(defun occult-edit-commit ()
+  "Commit the current edit session and close the indirect buffer.
+Changes already live in the base buffer because text is shared.
+In a read-only view session this simply closes the view buffer."
+  (interactive)
+  (unless occult-edit-mode
+    (user-error "Not in an occult edit session"))
+  (let ((buf (current-buffer))
+        (view-p occult-edit--read-only-p))
+    (set-buffer-modified-p nil)
+    (kill-buffer buf)
+    (message (if view-p "Occult view closed" "Occult edit committed"))))
+
+(defun occult-edit-abort ()
+  "Abort the current edit session, restoring the original fold content.
+Prompts for confirmation if the buffer has unsaved modifications.
+In a read-only view session this simply closes the view buffer
+without touching the base buffer."
+  (interactive)
+  (unless occult-edit-mode
+    (user-error "Not in an occult edit session"))
+  (let ((view-p occult-edit--read-only-p)
+        (buf (current-buffer))
+        (original occult-edit--original-text))
+    (if view-p
+        (progn
+          (kill-buffer buf)
+          (message "Occult view closed"))
+      (when (and (buffer-modified-p)
+                 (not (yes-or-no-p "Abort edit and discard changes? ")))
+        (user-error "Aborted"))
+      (let ((inhibit-modification-hooks t)
+            (src (generate-new-buffer " *occult-orig*")))
+        (unwind-protect
+            (progn
+              (with-current-buffer src (insert original))
+              (replace-buffer-contents src))
+          (kill-buffer src)))
+      (set-buffer-modified-p nil)
+      (kill-buffer buf)
+      (message "Occult edit aborted"))))
 
 (provide 'occult)
 ;;; occult.el ends here

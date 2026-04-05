@@ -3,6 +3,16 @@
 
 Changes to the project, following Keep a Changelog conventions.
 
+* [1.1.0] - 2026-04-05
+
+** Added
+- ~occult-edit-region~ command - edit or view the content of a fold in a narrowed indirect buffer. Bound to ~e~ on the fold keymap.
+- ~occult-edit-mode~ minor mode with a dynamic header line that always reflects the current commit and abort key bindings.
+- ~occult-edit-commit~ and ~occult-edit-abort~ commands. Commit keeps user changes; abort restores the original fold content via ~replace-buffer-contents~ without dissolving the fold overlays.
+- View-only session for read-only base buffers. Header shows "View Occult Fold" with a single close key; both commands simply close the view buffer.
+- Customizable key bindings: ~occult-edit-commit-key~ (default ~C-c C-c~) and ~occult-edit-abort-key~ (default ~C-c C-k~).
+- New faces for the edit header line: ~occult-edit-header~, ~occult-edit-commit-key~, ~occult-edit-abort-key~, ~occult-edit-header-separator~.
+
 * [1.0.0] - 2026-04-05
 
 ** Added

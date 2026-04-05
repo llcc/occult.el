@@ -35,7 +35,7 @@ live, navigable buffer text.
 
 ## Public API
 
-Three entry points: two interactive commands and one programmatic function.
+Interactive commands and a programmatic function.
 
 ### `occult-toggle`
 
@@ -62,6 +62,76 @@ Non-interactive. Programmatic entry point for creating a fold.
 - Calls `deactivate-mark` on success.
 - Signals `user-error` if the region overlaps an existing occult fold.
 
+### `occult-edit-region`
+
+Open the fold at point in a narrowed indirect buffer for editing. Bound to
+`e` on the fold keymap.
+
+- Signals `user-error` if point is not on an occult fold.
+- Creates an indirect buffer via `make-indirect-buffer` with CLONE=t.
+- Deletes all occult overlays inside the indirect buffer so the fold content
+  is fully visible and modification-hooks do not fire on shared text edits.
+- Narrows to the fold range and activates `occult-edit-mode`.
+- Base buffer's fold stays collapsed throughout the session.
+- Returns the indirect buffer (also displayed via `pop-to-buffer`).
+- If base buffer is read-only, the session is created in view mode
+  (see below).
+
+### `occult-edit-commit` / `occult-edit-abort`
+
+Commands active only inside `occult-edit-mode`. Both signal `user-error` if
+called outside an edit session.
+
+- `occult-edit-commit`: marks the indirect buffer unmodified and kills it,
+  keeping all user changes live in the base buffer (text is shared via the
+  indirect-buffer mechanism, no re-insertion needed).
+- `occult-edit-abort`: restores the fold region to its original contents
+  using `replace-buffer-contents` under `inhibit-modification-hooks`, which
+  shifts the base's fold overlays to match the original boundaries without
+  dissolving them. Prompts with `yes-or-no-p` when the buffer is modified.
+
+In a read-only view session both commands simply close the view buffer
+without touching the base buffer.
+
+## Edit Mode
+
+`occult-edit-mode` is a buffer-local minor mode enabled inside the indirect
+buffer created by `occult-edit-region`.
+
+- Keymap `occult-edit-mode-map` binds `occult-edit-commit-key` to
+  `occult-edit-commit` and `occult-edit-abort-key` to `occult-edit-abort`.
+  The map is rebuilt from the custom key variables whenever the mode is
+  enabled, and when either custom is set through `customize-set-variable`.
+- `header-line-format` is set to `(:eval (occult-edit--header-line))`, so
+  the displayed keys always reflect the current bindings via
+  `where-is-internal`.
+
+### Edit session header
+
+```
+ Edit Occult Fold  │ C-c C-c commit │ C-c C-k abort
+```
+
+### View session header (read-only base buffer)
+
+```
+ View Occult Fold  │ C-c C-k close
+```
+
+The view variant hides the commit binding entirely because there is nothing
+to commit; the abort key is relabelled "close" and simply kills the view
+buffer.
+
+### Session state
+
+Each session stores buffer-local state inside the indirect buffer:
+
+| Variable                      | Meaning                                   |
+|-------------------------------|-------------------------------------------|
+| `occult-edit--original-text`  | Fold content at session start (abort).    |
+| `occult-edit--base-buffer`    | Base buffer the session is attached to.   |
+| `occult-edit--read-only-p`    | `t` iff base buffer was read-only at start. |
+
 ## Point and Mark State After Operations
 
 - After `occult-hide-region` success (including via `occult-toggle` collapse
@@ -70,12 +140,17 @@ Non-interactive. Programmatic entry point for creating a fold.
   former boundaries, point at `end`, mark at `beg`.
 - After `occult-reveal-all`: point and mark are untouched.
 
-## No User-Facing Minor Mode
+## No User-Facing Top-Level Minor Mode
 
-There is no `occult-mode` the user toggles. The user calls `occult-toggle` and
-it works. An internal minor mode (`occult--mode`) activates/deactivates
-automatically to manage buffer-local hooks when folds exist. The user never
-interacts with it directly.
+There is no `occult-mode` the user toggles for folding. The user calls
+`occult-toggle` and it works. An internal minor mode (`occult--mode`)
+activates/deactivates automatically to manage buffer-local hooks when folds
+exist. The user never interacts with it directly.
+
+`occult-edit-mode` is different: it is enabled only inside the indirect
+buffer `occult-edit-region` creates, and the user interacts with it
+indirectly through the commit/abort key bindings surfaced in the header
+line.
 
 ## Overlay Properties
 
@@ -89,7 +164,7 @@ Folds use two overlays.
 | `occult-body`        | Reference to the body overlay                          |
 | `face`               | `occult-summary`                                       |
 | `before-string`      | Indicator string                                       |
-| `keymap`             | TAB and mouse-1 toggle the fold                        |
+| `keymap`             | TAB/mouse-1 toggle the fold; `e` opens it for editing  |
 | `help-echo`          | "Press TAB to expand"                                  |
 | `evaporate`          | `t`                                                    |
 | `modification-hooks` | Remove the fold if underlying text is edited           |
@@ -128,6 +203,14 @@ Inherit from standard faces to work in light and dark themes without custom colo
 
 - `occult-summary` - the summary text. Inherits from `shadow`, adds `:slant italic`.
 - `occult-indicator` - the prefix glyph. Inherits from `font-lock-constant-face`.
+- `occult-edit-header` - edit/view label in the header line. Bold, inherits
+  from `font-lock-function-name-face`.
+- `occult-edit-commit-key` - commit key in the header line. Bold, inherits
+  from `success`.
+- `occult-edit-abort-key` - abort/close key in the header line. Bold,
+  inherits from `error`.
+- `occult-edit-header-separator` - pipes and descriptive labels in the
+  header line. Inherits from `shadow`.
 
 ## Search Integration
 
@@ -184,17 +267,28 @@ lost - which is the expected behavior.
 - Empty / whitespace-only region: silent no-op, returns `nil`
 - `beg >= end`: silent no-op, returns `nil`
 - Single-line region: works (collapses to truncated summary)
-- Read-only buffers: works (overlays don't modify buffer text)
+- Read-only buffers: folds can be created and revealed normally; 
+  `occult-edit-region` opens a view-only session instead of an edit session
+- Buffers with no associated file: `occult-edit-region` works because the
+  indirect buffer is created via `make-indirect-buffer`, which does not
+  depend on the base buffer having a file
+- Editing inside the indirect buffer: text propagates immediately to the
+  base buffer (shared text), but the fold overlay in base stays collapsed
+  because the modification-hooks only fire on the cloned overlays that were
+  deleted from the indirect buffer at session start
 
 ## Customizable Variables
 
-| Variable                    | Default   | Description                              |
-|-----------------------------|-----------|------------------------------------------|
-| `occult-indicator`          | `"📎 "`   | Prefix string for summary line           |
-| `occult-ellipsis`           | `"..."`   | Suffix string for summary line           |
-| `occult-summary-max-length` | `80`      | Max chars from first line to show        |
-| `occult-auto-reveal`        | `nil`     | Auto-reveal mode: nil, echo, or expand   |
-| `occult-lighter`            | `" Occ"`  | Mode-line lighter (internal mode)        |
+| Variable                    | Default      | Description                               |
+|-----------------------------|--------------|-------------------------------------------|
+| `occult-indicator`          | `"📎 "`      | Prefix string for summary line            |
+| `occult-ellipsis`           | `"..."`      | Suffix string for summary line            |
+| `occult-summary-max-length` | `80`         | Max chars from first line to show         |
+| `occult-auto-reveal`        | `nil`        | Auto-reveal mode: nil, echo, or expand    |
+| `occult-lighter`            | `" Occ"`     | Mode-line lighter (internal mode)         |
+| `occult-edit-lighter`       | `" OccEdit"` | Mode-line lighter inside an edit session  |
+| `occult-edit-commit-key`    | `"C-c C-c"`  | Key that commits an edit session          |
+| `occult-edit-abort-key`     | `"C-c C-k"`  | Key that aborts / closes an edit session  |
 
 ## Package Metadata
 
