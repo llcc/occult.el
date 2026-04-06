@@ -24,36 +24,20 @@ Occult works on any region in any buffer - including read-only and special-mode 
 
 ** Install
 
-*** With straight.el / use-package
+Available on [[https://melpa.org/#/occult][MELPA]]:
 
 #+begin_src emacs-lisp
 (use-package occult
-  :straight (:host github :repo "agzam/occult.el"))
-#+end_src
-
-*** With built-in package-vc integration
-
-#+begin_src emacs-lisp
-(use-package occult
-  :vc (:url "https://github.com/agzam/occult.el"
-            :rev :newest))
-#+end_src
-
-*** Manual
-
-Clone the repo and add it to ~load-path~:
-
-#+begin_src emacs-lisp
-(add-to-list 'load-path "/path/to/occult.el")
-(require 'occult)
+  :ensure t)
 #+end_src
 
 ** Usage
 
-Two commands:
+Three commands:
 
 - ~occult-toggle~ - select a region and call it to collapse. Call it again with point on a fold to expand. TAB also toggles when point is on a fold.
 - ~occult-reveal-all~ - expand all folds in the current buffer.
+- ~occult-edit-region~ - open the fold at point in a narrowed indirect buffer for editing. Bound to ~e~ on the fold keymap.
 
 Bind them however you like:
 
@@ -62,14 +46,27 @@ Bind them however you like:
 (global-set-key (kbd "C-c Z") #'occult-reveal-all)
 #+end_src
 
+** Editing a fold
+
+Press ~e~ with point on a fold (or call ~M-x occult-edit-region~) to open the fold content in a separate indirect buffer. The base buffer's fold stays collapsed while you edit; changes propagate live because the text is shared. A header line shows the current commit and abort key bindings. When the base buffer is read-only the session opens in view mode with a single close key instead.
+
+#+begin_src
+ Edit Occult Fold  │ C-c C-c commit │ C-c C-k abort
+#+end_src
+
+- ~C-c C-c~ (customizable via ~occult-edit-commit-key~) - commit and close the indirect buffer, keeping user changes.
+- ~C-c C-k~ (customizable via ~occult-edit-abort-key~) - restore the original fold contents and close the indirect buffer.
+
 ** Customization
 
-| Variable                  | Default | Description                            |
-|---------------------------+---------+----------------------------------------|
-| ~occult-indicator~          | ~"📎 "~   | Prefix glyph for the fold summary      |
-| ~occult-ellipsis~           | ~"..."~   | Suffix shown where text is hidden      |
-| ~occult-summary-max-length~ | ~80~      | Max visible chars from the first line  |
-| ~occult-auto-reveal~        | ~nil~     | Auto-reveal mode: nil, echo, or expand |
+| Variable                    | Default      | Description                             |
+|-----------------------------+--------------+-----------------------------------------|
+| ~occult-indicator~            | ~"📎 "~      | Prefix glyph for the fold summary       |
+| ~occult-ellipsis~             | ~"..."~      | Suffix shown where text is hidden       |
+| ~occult-summary-max-length~   | ~80~         | Max visible chars from the first line   |
+| ~occult-auto-reveal~          | ~nil~        | Auto-reveal mode: nil, echo, or expand  |
+| ~occult-edit-commit-key~      | ~"C-c C-c"~  | Key that commits an edit session        |
+| ~occult-edit-abort-key~       | ~"C-c C-k"~  | Key that aborts / closes an edit session|
 
 ** Search integration
 
@@ -116,6 +113,18 @@ The native evil fold commands can be advised to work with occult. When a visual 
                     (occult-toggle)
                   (apply fn args)))))
 #+end_src
+
+* Related packages
+
+Other Emacs folding packages. Most fold by language structure or indentation; occult complements them by folding arbitrary regions into a one-line summary, keeping the underlying text accessible to ~buffer-string~, org-export, kill/yank, and isearch.
+
+- [[https://www.gnu.org/software/emacs/manual/html_node/emacs/Hideshow.html][hideshow]] - built-in ~hs-minor-mode~ for syntax-aware folding of comments and code blocks
+- [[https://github.com/jaalto/project-emacs--folding-mode][folding]] / ~folding-mode~ - marker-based folding (triple-brace comments), by Jari Aalto
+- [[https://github.com/gregsexton/origami.el][origami]] - parser-based structural folding with indentation fallback
+- [[https://github.com/emacs-lsp/lsp-origami][lsp-origami]] - origami driven by LSP fold ranges
+- [[https://github.com/emacs-tree-sitter/ts-fold][ts-fold]] - tree-sitter folding via external ~emacs-tree-sitter~
+- [[https://github.com/emacs-tree-sitter/treesit-fold][treesit-fold]] - tree-sitter folding via built-in ~treesit~ (Emacs 29+)
+- [[https://github.com/emacsorphanage/yafolding][yafolding]] - indentation-based folding
 
 * [[file:changelog.org][Changelog]].
 

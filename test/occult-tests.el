@@ -133,6 +133,49 @@
       (goto-char 1)
       (expect (occult-toggle) :to-throw 'user-error))))
 
+;;; Toggle region restore
+
+(describe "occult-toggle region restore"
+  (it "activates region after expanding a fold"
+    (occult-test-with-buffer "Line 1\nLine 2\n"
+      (occult-hide-region 1 15)
+      (goto-char 1)
+      (occult-toggle)
+      (expect (region-active-p) :to-be-truthy)))
+
+  (it "restored region matches original fold boundaries"
+    (occult-test-with-buffer "Line 1\nLine 2\n"
+      (occult-hide-region 1 15)
+      (goto-char 1)
+      (occult-toggle)
+      (expect (region-beginning) :to-equal 1)
+      (expect (region-end) :to-equal 15)))
+
+  (it "places point at end and mark at beg"
+    (occult-test-with-buffer "Line 1\nLine 2\n"
+      (occult-hide-region 1 15)
+      (goto-char 1)
+      (occult-toggle)
+      (expect (point) :to-equal 15)
+      (expect (mark) :to-equal 1)))
+
+  (it "overrides a pre-existing deactivated mark elsewhere"
+    (occult-test-with-buffer "Line 1\nLine 2\nLine 3\n"
+      (push-mark 20 t nil)
+      (occult-hide-region 1 8)
+      (goto-char 1)
+      (occult-toggle)
+      (expect (region-beginning) :to-equal 1)
+      (expect (region-end) :to-equal 8)
+      (expect (region-active-p) :to-be-truthy)))
+
+  (it "does not activate region after occult-reveal-all"
+    (occult-test-with-buffer "Line 1\nLine 2\n"
+      (occult-hide-region 1 15)
+      (goto-char 1)
+      (occult-reveal-all)
+      (expect (region-active-p) :not :to-be-truthy))))
+
 ;;; Reveal all
 
 (describe "occult-reveal-all"
@@ -297,6 +340,313 @@
           (expect (overlay-start body) :to-be-greater-than 1)
           ;; Body should start at end of first line (pos 11)
           (expect (overlay-start body) :to-equal 11))))))
+
+;;; Indirect-buffer editing
+
+(defmacro occult-test-with-edit-session (text fold-beg fold-end &rest body)
+  "Run BODY inside an active occult-edit session.
+TEXT is inserted into a new base buffer with a fold at FOLD-BEG..FOLD-END.
+BODY runs in the edit buffer; bindings BASE and EDIT are available.
+The edit buffer and base buffer are cleaned up at the end."
+  (declare (indent 3))
+  `(let ((base (generate-new-buffer "*occult-test-base*")))
+     (unwind-protect
+         (let (edit)
+           (with-current-buffer base
+             (insert ,text)
+             (goto-char (point-min))
+             (occult-hide-region ,fold-beg ,fold-end)
+             (goto-char (+ ,fold-beg 1))
+             (setq edit (save-window-excursion (occult-edit-region))))
+           (unwind-protect
+               (with-current-buffer edit ,@body)
+             (when (buffer-live-p edit) (kill-buffer edit))))
+       (when (buffer-live-p base) (kill-buffer base)))))
+
+(describe "occult-edit-region"
+  (it "opens a narrowed indirect buffer for the fold at point"
+    (occult-test-with-buffer "Line 1\nLine 2\nLine 3\n"
+      (occult-hide-region 1 15)
+      (goto-char 3)
+      (let* ((base (current-buffer))
+             (buf (save-window-excursion (occult-edit-region))))
+        (unwind-protect
+            (with-current-buffer buf
+              (expect (buffer-base-buffer) :to-equal base)
+              (expect (point-min) :to-equal 1)
+              (expect (point-max) :to-equal 15))
+          (when (buffer-live-p buf) (kill-buffer buf))))))
+
+  (it "signals when no fold is at point"
+    (occult-test-with-buffer "Hello\n"
+      (goto-char 1)
+      (expect (occult-edit-region) :to-throw 'user-error)))
+
+  (it "works for buffers without file association"
+    (occult-test-with-edit-session "Line 1\nLine 2\nLine 3\n" 1 15
+      (expect (buffer-live-p (current-buffer)) :to-be-truthy)
+      (expect (buffer-base-buffer) :not :to-be nil)))
+
+  (it "removes occult overlays inside the indirect buffer"
+    (occult-test-with-edit-session "Line 1\nLine 2\nLine 3\n" 1 15
+      (let ((occult-ovs
+             (cl-remove-if-not
+              (lambda (ov)
+                (or (overlay-get ov 'occult)
+                    (overlay-get ov 'occult-parent)))
+              (overlays-in (point-min) (point-max)))))
+        (expect (length occult-ovs) :to-equal 0))))
+
+  (it "keeps fold collapsed in the base buffer"
+    (occult-test-with-edit-session "Line 1\nLine 2\nLine 3\n" 1 15
+      (with-current-buffer (buffer-base-buffer)
+        (expect (cl-find-if (lambda (ov) (overlay-get ov 'occult))
+                            (overlays-in (point-min) (point-max)))
+                :to-be-truthy))))
+
+  (it "activates occult-edit-mode in the indirect buffer"
+    (occult-test-with-edit-session "Line 1\nLine 2\nLine 3\n" 1 15
+      (expect occult-edit-mode :to-be-truthy)
+      (expect header-line-format :not :to-be nil)))
+
+  (it "does not dissolve fold when editing inside the indirect buffer"
+    (occult-test-with-edit-session "Line 1\nLine 2\nLine 3\n" 1 15
+      (goto-char 3)
+      (insert "X")
+      (with-current-buffer (buffer-base-buffer)
+        (expect (cl-find-if (lambda (ov) (overlay-get ov 'occult))
+                            (overlays-in (point-min) (point-max)))
+                :to-be-truthy)))))
+
+(describe "occult-edit-commit"
+  (it "keeps user changes in the base buffer and kills the indirect buffer"
+    (let ((base (generate-new-buffer "*occult-commit-test*")))
+      (unwind-protect
+          (let (edit)
+            (with-current-buffer base
+              (insert "Line 1\nLine 2\nLine 3\n")
+              (goto-char (point-min))
+              (occult-hide-region 1 15)
+              (goto-char 3)
+              (setq edit (save-window-excursion (occult-edit-region))))
+            (with-current-buffer edit
+              (goto-char 3)
+              (insert "EDIT ")
+              (occult-edit-commit))
+            (expect (buffer-live-p edit) :not :to-be-truthy)
+            (expect (with-current-buffer base
+                      (buffer-substring-no-properties (point-min) (point-max)))
+                    :to-match "LiEDIT "))
+        (when (buffer-live-p base) (kill-buffer base)))))
+
+  (it "signals when called outside an edit session"
+    (with-temp-buffer
+      (expect (occult-edit-commit) :to-throw 'user-error))))
+
+(describe "occult-edit-abort"
+  (it "restores original fold content in the base buffer"
+    (let ((base (generate-new-buffer "*occult-abort-test*")))
+      (unwind-protect
+          (let ((original "Line 1\nLine 2\nLine 3\n")
+                edit)
+            (with-current-buffer base
+              (insert original)
+              (goto-char (point-min))
+              (occult-hide-region 1 15)
+              (goto-char 3)
+              (setq edit (save-window-excursion (occult-edit-region))))
+            (with-current-buffer edit
+              (goto-char 3)
+              (insert "EDIT ")
+              ;; Bypass confirmation prompt
+              (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t)))
+                (occult-edit-abort)))
+            (expect (buffer-live-p edit) :not :to-be-truthy)
+            (expect (with-current-buffer base
+                      (buffer-substring-no-properties (point-min) (point-max)))
+                    :to-equal original))
+        (when (buffer-live-p base) (kill-buffer base)))))
+
+  (it "preserves fold overlays in the base buffer after abort"
+    (let ((base (generate-new-buffer "*occult-abort-ov-test*")))
+      (unwind-protect
+          (let (edit)
+            (with-current-buffer base
+              (insert "Line 1\nLine 2\nLine 3\n")
+              (goto-char (point-min))
+              (occult-hide-region 1 15)
+              (goto-char 3)
+              (setq edit (save-window-excursion (occult-edit-region))))
+            (with-current-buffer edit
+              (goto-char 3)
+              (insert "EDIT ")
+              (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t)))
+                (occult-edit-abort)))
+            (with-current-buffer base
+              (expect (cl-find-if (lambda (ov) (overlay-get ov 'occult))
+                                  (overlays-in (point-min) (point-max)))
+                      :to-be-truthy)
+              (expect (cl-find-if (lambda (ov) (overlay-get ov 'occult-parent))
+                                  (overlays-in (point-min) (point-max)))
+                      :to-be-truthy)))
+        (when (buffer-live-p base) (kill-buffer base)))))
+
+  (it "signals when called outside an edit session"
+    (with-temp-buffer
+      (expect (occult-edit-abort) :to-throw 'user-error))))
+
+(describe "occult-edit header-line"
+  (it "includes the configured commit and abort key descriptions"
+    (occult-test-with-edit-session "Line 1\nLine 2\nLine 3\n" 1 15
+      (let ((header (occult-edit--header-line)))
+        (expect header :to-match (regexp-quote "C-c C-c"))
+        (expect header :to-match (regexp-quote "C-c C-k"))
+        (expect header :to-match "commit")
+        (expect header :to-match "abort"))))
+
+  (it "reflects re-bound keys dynamically"
+    (occult-test-with-edit-session "Line 1\nLine 2\nLine 3\n" 1 15
+      ;; Re-bind commit to a different key in the mode map
+      (let ((occult-edit-mode-map (copy-keymap occult-edit-mode-map)))
+        (define-key occult-edit-mode-map (kbd "C-c C-c") nil)
+        (define-key occult-edit-mode-map (kbd "C-c C-s") #'occult-edit-commit)
+        (let ((header (occult-edit--header-line)))
+          (expect header :to-match "C-c C-s"))))))
+
+(describe "occult-edit read-only (view) session"
+  (it "starts a view session when base buffer is read-only"
+    (let ((base (generate-new-buffer "*occult-ro-test*")))
+      (unwind-protect
+          (let (edit)
+            (with-current-buffer base
+              (insert "Line 1\nLine 2\nLine 3\n")
+              (goto-char (point-min))
+              (occult-hide-region 1 15)
+              (setq buffer-read-only t)
+              (goto-char 3)
+              (setq edit (save-window-excursion (occult-edit-region))))
+            (unwind-protect
+                (with-current-buffer edit
+                  (expect occult-edit--read-only-p :to-be-truthy))
+              (when (buffer-live-p edit) (kill-buffer edit))))
+        (when (buffer-live-p base) (kill-buffer base)))))
+
+  (it "shows View label and close key in header-line"
+    (let ((base (generate-new-buffer "*occult-ro-header-test*")))
+      (unwind-protect
+          (let (edit)
+            (with-current-buffer base
+              (insert "Line 1\nLine 2\nLine 3\n")
+              (goto-char (point-min))
+              (occult-hide-region 1 15)
+              (setq buffer-read-only t)
+              (goto-char 3)
+              (setq edit (save-window-excursion (occult-edit-region))))
+            (unwind-protect
+                (with-current-buffer edit
+                  (let ((header (occult-edit--header-line)))
+                    (expect header :to-match "View Occult Fold")
+                    (expect header :to-match "close")
+                    (expect header :not :to-match "commit")
+                    (expect header :not :to-match "abort")))
+              (when (buffer-live-p edit) (kill-buffer edit))))
+        (when (buffer-live-p base) (kill-buffer base)))))
+
+  (it "abort in view session just closes without modifying base"
+    (let ((base (generate-new-buffer "*occult-ro-abort-test*")))
+      (unwind-protect
+          (let ((original "Line 1\nLine 2\nLine 3\n")
+                edit)
+            (with-current-buffer base
+              (insert original)
+              (goto-char (point-min))
+              (occult-hide-region 1 15)
+              (setq buffer-read-only t)
+              (goto-char 3)
+              (setq edit (save-window-excursion (occult-edit-region))))
+            (with-current-buffer edit (occult-edit-abort))
+            (expect (buffer-live-p edit) :not :to-be-truthy)
+            (with-current-buffer base
+              (expect (buffer-substring-no-properties
+                       (point-min) (point-max)) :to-equal original)
+              (expect (cl-find-if (lambda (ov) (overlay-get ov 'occult))
+                                  (overlays-in (point-min) (point-max)))
+                      :to-be-truthy)))
+        (when (buffer-live-p base) (kill-buffer base)))))
+
+  (it "commit in view session also just closes"
+    (let ((base (generate-new-buffer "*occult-ro-commit-test*")))
+      (unwind-protect
+          (let (edit)
+            (with-current-buffer base
+              (insert "Line 1\nLine 2\nLine 3\n")
+              (goto-char (point-min))
+              (occult-hide-region 1 15)
+              (setq buffer-read-only t)
+              (goto-char 3)
+              (setq edit (save-window-excursion (occult-edit-region))))
+            (with-current-buffer edit (occult-edit-commit))
+            (expect (buffer-live-p edit) :not :to-be-truthy))
+        (when (buffer-live-p base) (kill-buffer base))))))
+
+(describe "occult-edit session window cleanup"
+  (it "commit deletes the window opened by the edit session"
+    (let ((base (generate-new-buffer "*occult-win-commit*")))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (switch-to-buffer base)
+            (with-current-buffer base
+              (insert "Line 1\nLine 2\nLine 3\n")
+              (goto-char (point-min))
+              (occult-hide-region 1 15)
+              (goto-char 3))
+            (let* ((edit (occult-edit-region))
+                   (during (length (window-list))))
+              (with-current-buffer edit (occult-edit-commit))
+              (expect during :to-equal 2)
+              (expect (length (window-list)) :to-equal 1)))
+        (when (buffer-live-p base) (kill-buffer base)))))
+
+  (it "abort deletes the window opened by the edit session"
+    (let ((base (generate-new-buffer "*occult-win-abort*")))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (switch-to-buffer base)
+            (with-current-buffer base
+              (insert "Line 1\nLine 2\nLine 3\n")
+              (goto-char (point-min))
+              (occult-hide-region 1 15)
+              (goto-char 3))
+            (let* ((edit (occult-edit-region))
+                   (during (length (window-list))))
+              (with-current-buffer edit
+                (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_) t)))
+                  (occult-edit-abort)))
+              (expect during :to-equal 2)
+              (expect (length (window-list)) :to-equal 1)))
+        (when (buffer-live-p base) (kill-buffer base)))))
+
+  (it "does not error when edit buffer shares window with base"
+    (let ((base (generate-new-buffer "*occult-win-same*")))
+      (unwind-protect
+          (save-window-excursion
+            (delete-other-windows)
+            (switch-to-buffer base)
+            (with-current-buffer base
+              (insert "Line 1\nLine 2\nLine 3\n")
+              (goto-char (point-min))
+              (occult-hide-region 1 15)
+              (goto-char 3))
+            (let* ((display-buffer-alist
+                    '((".*" display-buffer-same-window)))
+                   (edit (occult-edit-region)))
+              (with-current-buffer edit (occult-edit-commit))
+              (expect (length (window-list)) :to-equal 1)
+              ;; base buffer should be visible again in the sole window
+              (expect (window-buffer) :to-equal base)))
+        (when (buffer-live-p base) (kill-buffer base))))))
 
 (provide 'occult-tests)
 
